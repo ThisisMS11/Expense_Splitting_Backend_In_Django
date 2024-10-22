@@ -1,13 +1,14 @@
-from rest_framework import generics
+from rest_framework import generics,status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
-from .serializers import ExpenseSerializer
-from .models import Expense
+from .serializers import ExpenseSerializer,SplitSerializer
+from .models import Expense,ExpenseSplit
 from django.db import models
 from django.http import HttpResponse
 from reportlab.pdfgen import canvas
 from io import BytesIO
 from django.db.models import Sum, Q
+from decimal import Decimal
 
 # Endpoint to add an expense
 class AddExpenseView(generics.CreateAPIView):
@@ -27,6 +28,35 @@ class UserExpensesView(generics.ListAPIView):
         return Expense.objects.filter(
             models.Q(paid_by=self.request.user) | models.Q(splits__user=self.request.user)
         ).distinct()
+    
+# To pay the split by paying some amount
+class UserPayExpensesView(generics.UpdateAPIView):
+    serializer_class = SplitSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        # Get the ExpenseSplit for the logged-in user
+        expense_id = self.kwargs.get('expense_id')
+        return ExpenseSplit.objects.get(expense__id=expense_id, user=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        expense_split = self.get_object()
+
+        # Get the payment amount from the request data
+        payment_amount = request.data.get('amount_paid')
+
+        if not payment_amount:
+            return HttpResponse({"error": "Amount paid is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Update the payment using the model's method
+            payment_amount = Decimal(payment_amount)
+            expense_split.update_payment(payment_amount)
+        except ValueError:
+            return HttpResponse({"error": "Invalid amount."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(expense_split)
+        return HttpResponse(serializer.data, status=status.HTTP_200_OK)
 
 # Endpoint to retrieve all expenses (overall expenses)
 class OverallExpensesView(generics.ListAPIView):
